@@ -53,9 +53,32 @@ export function PhotoViewer({
   const savedTx = useSharedValue(0);
   const savedTy = useSharedValue(0);
 
-  /** Distance between the first two active touches, in screen pixels. */
-  const pinchStart = useRef(0);
+  /** Pinch anchor, captured when the second finger lands. */
+  const pinchDist0 = useRef(0);
+  const pinchMid0X = useRef(0);
+  const pinchMid0Y = useRef(0);
+  /** Previous single-finger position, so panning is incremental. */
+  const lastX = useRef(0);
+  const lastY = useRef(0);
   const lastTap = useRef(0);
+
+  /**
+   * Touch position in this view's own coordinates, measured from its centre.
+   *
+   * Working centre-relative is what makes the pinch algebra work out: the
+   * transform list is [translate, scale], so a content point at offset u from
+   * the centre lands at `translate + scale * u`. Solving for the translation
+   * that keeps a chosen point under the fingers is then a two-line operation
+   * instead of a bookkeeping exercise in full-screen coordinates.
+   */
+  const centreOf = useCallback(
+    (t: any) => {
+      const x = typeof t?.locationX === "number" ? t.locationX : t?.pageX ?? 0;
+      const y = typeof t?.locationY === "number" ? t.locationY : t?.pageY ?? 0;
+      return { x: x - width / 2, y: y - height / 2 };
+    },
+    [width, height],
+  );
 
   /**
    * How far the image may drift before it would show empty space. Recomputed per
@@ -63,14 +86,32 @@ export function PhotoViewer({
    */
   const clamp = useCallback(
     (s: number, x: number, y: number) => {
-      const limitX = Math.max(0, ((width * s) - width) / 2);
-      const limitY = Math.max(0, ((height * s) - height) / 2);
+      const limitX = Math.max(0, (width * s - width) / 2);
+      const limitY = Math.max(0, (height * s - height) / 2);
       return {
         x: Math.max(-limitX, Math.min(limitX, x)),
         y: Math.max(-limitY, Math.min(limitY, y)),
       };
     },
     [width, height],
+  );
+
+  /** Re-anchor the pinch to the fingers as they are right now. */
+  const beginPinch = useCallback(
+    (touches: any[]) => {
+      const a = centreOf(touches[0]);
+      const b = centreOf(touches[1]);
+      pinchDist0.current = Math.hypot(a.x - b.x, a.y - b.y);
+      pinchMid0X.current = (a.x + b.x) / 2;
+      pinchMid0Y.current = (a.y + b.y) / 2;
+      savedScale.value = scale.value;
+      savedTx.value = tx.value;
+      savedTy.value = ty.value;
+    },
+    // Reanimated shared values are stable refs, so centreOf is the only
+    // dependency that can actually change between renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [centreOf],
   );
 
   const pan = useRef(
@@ -82,59 +123,74 @@ export function PhotoViewer({
       onPanResponderGrant: (e) => {
         const touches = e.nativeEvent.touches;
         if (touches.length >= 2) {
-          const dx = touches[0].pageX - touches[1].pageX;
-          const dy = touches[0].pageY - touches[1].pageY;
-          pinchStart.current = Math.hypot(dx, dy);
-        } else {
+          beginPinch(touches);
+        } else if (touches.length === 1) {
+          const p = centreOf(touches[0]);
+          lastX.current = p.x;
+          lastY.current = p.y;
           savedScale.value = scale.value;
           savedTx.value = tx.value;
           savedTy.value = ty.value;
         }
       },
 
-      onPanResponderMove: (e, g) => {
+      onPanResponderMove: (e) => {
         const touches = e.nativeEvent.touches;
 
         if (touches.length >= 2) {
-          // --- pinch ---
-          const dx = touches[0].pageX - touches[1].pageX;
-          const dy = touches[0].pageY - touches[1].pageY;
-          const dist = Math.hypot(dx, dy);
-          if (pinchStart.current <= 0) {
-            pinchStart.current = dist;
-            savedScale.value = scale.value;
+          // A second finger can land mid-drag, so the anchor may not exist yet.
+          if (pinchDist0.current <= 0) {
+            beginPinch(touches);
             return;
           }
+
+          const a = centreOf(touches[0]);
+          const b = centreOf(touches[1]);
+          const dist = Math.hypot(a.x - b.x, a.y - b.y);
+          const midNowX = (a.x + b.x) / 2;
+          const midNowY = (a.y + b.y) / 2;
+
+          const base = savedScale.value || 1;
           const next = Math.max(
             MIN_SCALE,
-            Math.min(MAX_SCALE, (savedScale.value * dist) / pinchStart.current),
+            Math.min(MAX_SCALE, (base * dist) / pinchDist0.current),
           );
 
-          // Keep the midpoint between the fingers fixed on screen, which means
-          // the content under the hands does not slide out from under them.
-          const midX = (touches[0].pageX + touches[1].pageX) / 2 - width / 2;
-          const midY = (touches[0].pageY + touches[1].pageY) / 2 - height / 2;
-          const factor = next / (savedScale.value || 1);
+          // The content point that sat under the fingers when the pinch began
+          // must still sit under them now.
+          const contentX = (pinchMid0X.current - savedTx.value) / base;
+          const contentY = (pinchMid0Y.current - savedTy.value) / base;
 
           scale.value = next;
-          const rawX = midX - (midX - savedTx.value) * factor;
-          const rawY = midY - (midY - savedTy.value) * factor;
-          const c = clamp(next, rawX, rawY);
+          const c = clamp(
+            next,
+            midNowX - next * contentX,
+            midNowY - next * contentY,
+          );
           tx.value = c.x;
           ty.value = c.y;
           return;
         }
 
-        // --- one finger: pan, only while zoomed in ---
-        if (scale.value <= 1.01) return;
-        const c = clamp(scale.value, savedTx.value + g.dx, savedTy.value + g.dy);
-        tx.value = c.x;
-        ty.value = c.y;
+        if (touches.length === 1) {
+          // Incremental rather than using the gesture's total dx/dy, so lifting
+          // or adding a second finger does not make the image jump.
+          const p = centreOf(touches[0]);
+          const dx = p.x - lastX.current;
+          const dy = p.y - lastY.current;
+          lastX.current = p.x;
+          lastY.current = p.y;
+
+          if (scale.value <= 1.01) return;
+          const c = clamp(scale.value, tx.value + dx, ty.value + dy);
+          tx.value = c.x;
+          ty.value = c.y;
+        }
       },
 
       onPanResponderRelease: (e, g) => {
         const moved = Math.abs(g.dx) > 6 || Math.abs(g.dy) > 6;
-        pinchStart.current = 0;
+        pinchDist0.current = 0;
 
         // A tap that did not drag: double-tap toggles between fit and 2.5x,
         // and a single tap is left to the close button rather than being a
