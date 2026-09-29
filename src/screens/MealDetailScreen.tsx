@@ -1,8 +1,18 @@
-import React from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import React, { useEffect, useState } from "react";
+import {
+  ActivityIndicator,
+  Image,
+  Pressable,
+  ScrollView,
+  Text,
+  View,
+} from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { NutritionBreakdown } from "../components/NutritionBreakdown";
 import { BowlIcon } from "../components/NutritionIcons";
+import { PhotoViewer } from "../components/PhotoViewer";
+import { photoUrl } from "../lib/photoStorage";
 import { colors } from "../theme";
 import { edibleWeight, hasBone, type Ingredient, type LoggedMeal, type Micros, type ParsedMeal } from "../lib/types";
 import { nfOneDp } from "../lib/format";
@@ -38,6 +48,31 @@ export function MealDetailScreen({
   onBack: () => void;
 }) {
   const insets = useSafeAreaInsets();
+  const [viewingPhoto, setViewingPhoto] = useState(false);
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+
+  /**
+   * The bucket is private, so a stored path is not renderable on its own - it
+   * has to be exchanged for a short-lived signed URL. The path is stable, so
+   * this only ever resolves once per path per session.
+   */
+  useEffect(() => {
+    let cancelled = false;
+    if (!meal.photo_path) {
+      setPhotoUri(null);
+      return;
+    }
+    photoUrl(meal.photo_path).then((u) => {
+      if (!cancelled) setPhotoUri(u);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meal.photo_path]);
+
+  if (viewingPhoto && photoUri) {
+    return <PhotoViewer uri={photoUri} onClose={() => setViewingPhoto(false)} />;
+  }
 
   // The stored row is the source of truth; this just adapts it to the shape the
   // breakdown component already consumes.
@@ -100,6 +135,34 @@ export function MealDetailScreen({
             </Text>
           </View>
         </View>
+
+        {/* the plate this was read from */}
+        {meal.photo_path ? (
+          <Pressable
+            onPress={() => photoUri && setViewingPhoto(true)}
+            disabled={!photoUri}
+            className="mb-6 overflow-hidden rounded-3xl border border-[#E5E7EB] bg-[#F3F4F6] active:opacity-80"
+          >
+            {photoUri ? (
+              <Image
+                source={{ uri: photoUri }}
+                style={{ width: "100%", height: 210 }}
+                resizeMode="cover"
+                accessibilityLabel="Photo of this meal"
+              />
+            ) : (
+              <View className="h-[210px] items-center justify-center">
+                <ActivityIndicator size="small" color={colors.muted} />
+              </View>
+            )}
+            <View className="flex-row items-center justify-between px-4 py-2.5">
+              <Text className="text-[11px] font-semibold text-[#6B7280]">
+                Tap to view full screen
+              </Text>
+              <Ionicons name="expand-outline" size={16} color={colors.muted} />
+            </View>
+          </Pressable>
+        ) : null}
 
         <NutritionBreakdown meal={asMeal} ingredients={ingredients} />
 

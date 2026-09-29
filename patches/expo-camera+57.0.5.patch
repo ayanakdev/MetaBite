@@ -1,0 +1,105 @@
+diff --git a/node_modules/expo-camera/android/src/main/java/expo/modules/camera/CameraViewModule.kt b/node_modules/expo-camera/android/src/main/java/expo/modules/camera/CameraViewModule.kt
+index 21382f8..a7ac737 100644
+--- a/node_modules/expo-camera/android/src/main/java/expo/modules/camera/CameraViewModule.kt
++++ b/node_modules/expo-camera/android/src/main/java/expo/modules/camera/CameraViewModule.kt
+@@ -390,6 +390,13 @@ class CameraViewModule : Module() {
+         }
+       }
+ 
++      // MetaBite patch: tap-to-focus. The JS side encodes the tapped point as
++      // "x,y#seq"; expo-camera forwards the prop through untouched, so no change
++      // to the JavaScript side of the library is required for this to work.
++      Prop("focusPoint") { view, focusPoint: String? ->
++        view.applyFocusPoint(focusPoint)
++      }
++
+       Prop("ratio") { view, ratio: CameraRatio? ->
+         ratio?.let {
+           if (view.ratio != it) {
+diff --git a/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt b/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
+index 999a22c..3426d8e 100644
+--- a/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
++++ b/node_modules/expo-camera/android/src/main/java/expo/modules/camera/ExpoCameraView.kt
+@@ -628,17 +628,60 @@ class ExpoCameraView(
+     }.build()
+   }
+ 
++  /**
++   * MetaBite patch: entry point for tap-to-focus, driven from JS.
++   *
++   * The payload is "x,y#seq" with x and y normalised to 0..1 across the preview.
++   * Carrying all three in one prop, rather than three separate props, means the
++   * order the view manager applies them in cannot produce a focus on stale
++   * coordinates - and the trailing sequence guarantees the string differs on
++   * every tap, so tapping the same spot twice still re-focuses.
++   */
++  fun applyFocusPoint(payload: String?) {
++    val parts = payload?.split('#') ?: return
++    if (parts.size < 2) return
++    val coords = parts[0].split(',')
++    if (coords.size < 2) return
++    val x = coords[0].toFloatOrNull() ?: return
++    val y = coords[1].toFloatOrNull() ?: return
++    startFocusMeteringAt(x, y)
++  }
++
+   private fun startFocusMetering() {
++    startFocusMeteringAt(1f, 1f)
++  }
++
++  /**
++   * MetaBite patch: tap-to-focus.
++   *
++   * The original always meters the top-left corner, so a tap could never move
++   * focus. This overload takes a normalised point in the preview's coordinate
++   * space (0..1 on each axis) and meters there instead.
++   *
++   * The point is clamped rather than trusted: an out-of-range value would make
++   * CameraX throw, and a tap can legitimately land a fraction outside the frame
++   * on a device with rounded corners or an edge-to-edge inset.
++   */
++  fun startFocusMeteringAt(normalizedX: Float, normalizedY: Float) {
+     camera?.let {
++      val width = previewView.width.toFloat()
++      val height = previewView.height.toFloat()
++      if (width <= 0f || height <= 0f) return
++
++      val x = normalizedX.coerceIn(0f, 1f)
++      val y = normalizedY.coerceIn(0f, 1f)
++
+       val meteringPointFactory = DisplayOrientedMeteringPointFactory(
+         previewView.display,
+         it.cameraInfo,
+-        previewView.width.toFloat(),
+-        previewView.height.toFloat()
++        width,
++        height
+       )
+       val action = FocusMeteringAction.Builder(
+-        meteringPointFactory.createPoint(1f, 1f),
+-        FocusMeteringAction.FLAG_AF
++        meteringPointFactory.createPoint(x, y),
++        // AF and AE together, so a tap focuses and re-exposes the spot it
++        // focused on rather than leaving the exposure locked to the corner.
++        FocusMeteringAction.FLAG_AF or FocusMeteringAction.FLAG_AE
+       )
+         .build()
+       it.cameraControl.startFocusAndMetering(action)
+diff --git a/node_modules/expo-camera/expo-module.config.json b/node_modules/expo-camera/expo-module.config.json
+index 149ee8b..23473ce 100644
+--- a/node_modules/expo-camera/expo-module.config.json
++++ b/node_modules/expo-camera/expo-module.config.json
+@@ -5,12 +5,6 @@
+     "podspecPath": ["ios/ExpoCamera.podspec"]
+   },
+   "android": {
+-    "modules": ["expo.modules.camera.CameraViewModule"],
+-    "publication": {
+-      "groupId": "host.exp.exponent",
+-      "artifactId": "expo.modules.camera",
+-      "version": "57.0.5",
+-      "repository": "local-maven-repo"
+-    }
++    "modules": ["expo.modules.camera.CameraViewModule"]
+   }
+ }

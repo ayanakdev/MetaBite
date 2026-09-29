@@ -9,7 +9,7 @@ import {
   TextInput,
   View,
 } from "react-native";
-import { Camera, CameraView, useCameraPermissions } from "expo-camera";
+import { Camera, CameraView, useCameraPermissions, type CameraViewProps } from "expo-camera";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -35,18 +35,34 @@ const MIN_ANALYSIS_MS = 850;
 /** Interval for the slow auto-advance of the analysis copy. */
 const STAGE_TICK_MS = 2200;
 
+/** How long the focus reticle stays on screen after a tap. */
+const FOCUS_FEEDBACK_MS = 1100;
+
 /**
- * Zoom level for the double-tap toggle, as a fraction of the device's maximum.
- * Half of max is a noticeable step that still leaves enough frame around a plate
- * to keep the reference object in shot.
+ * `<CameraView>` with the `focusPoint` prop added.
+ *
+ * `patches/expo-camera+57.0.5.patch` adds that prop to the native view and
+ * registers a matching `Prop(...)` binding, but the library's TypeScript types
+ * come from its own source and know nothing about a local patch. It cannot be
+ * fixed with a `declare module` augmentation either, because expo-camera types
+ * `CameraViewProps` as a type alias and an alias cannot be merged into.
+ *
+ * So the patched surface is declared once, here, as narrowly as it actually is:
+ * a single optional string. Everything else about the component stays fully
+ * type-checked against the real library types.
  */
-const ZOOM_TIGHT = 0.5;
+type PatchedCameraViewProps = CameraViewProps & {
+  focusPoint?: string;
+  ref?: React.Ref<CameraView>;
+};
+
+const PatchedCameraView = CameraView as unknown as React.ComponentType<PatchedCameraViewProps>;
 
 export function ScanScreen({
   onResult,
   onCancel,
 }: {
-  onResult: (m: ParsedMeal) => void;
+  onResult: (m: ParsedMeal, photo?: Shot) => void;
   onCancel: () => void;
 }) {
   const [perm] = useCameraPermissions();
@@ -65,37 +81,59 @@ export function ScanScreen({
   const [busy, setBusy] = useState(false);
   const [stage, setStage] = useState(0);
   const [torchOn, setTorchOn] = useState(false);
-  const [zoomLevel, setZoomLevel] = useState(0);
   const [pictureSize, setPictureSize] = useState<string | undefined>(undefined);
-  const lastTap = useRef(0);
+  const [viewSize, setViewSize] = useState({ width: 0, height: 0 });
+  const [focusAt, setFocusAt] = useState<{ x: number; y: number } | null>(null);
 
   /**
-   * Double-tap toggles between the full frame and a tighter one.
-   *
-   * expo-camera 57 exposes no tap-to-focus: there is no `focus` prop, no
-   * `focus()` method, and the Android view hardcodes its metering point to the
-   * top-left corner with no entry point for anything else. Rather than draw a
-   * reticle that implies a focus lock which never happens, the tap does the one
-   * camera adjustment this SDK can genuinely perform - the `zoom` prop, which
-   * the native layer maps onto CameraX's setZoomRatio.
-   *
-   * It is a real feature for this app rather than a camera toy: a phone held far
-   * enough back that the plate is small in frame is the most common cause of a
-   * poor portion read, and a tighter crop fixes it.
-   *
-   * No zoom readout is drawn, because the module exposes no maximum zoom ratio,
-   * so any "2x" label could overstate what the device actually applied. The
-   * honest feedback is the image itself getting bigger.
+   * Bumped on every tap so the payload sent to the native view always differs.
+   * Without it, tapping the same spot twice would send an identical prop value
+   * and the second tap would be swallowed as "no change".
    */
-  const onCameraTap = useCallback(() => {
-    const now = Date.now();
-    if (now - lastTap.current < 320) {
-      setZoomLevel((z) => (z === 0 ? ZOOM_TIGHT : 0));
-      lastTap.current = 0;
-    } else {
-      lastTap.current = now;
-    }
+  const focusSeq = useRef(0);
+  const focusTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (focusTimer.current) clearTimeout(focusTimer.current);
+    };
   }, []);
+
+  /**
+   * Tap to focus.
+   *
+   * expo-camera 57 ships no way to do this: there is no `focus` prop, no
+   * `focus()` method, and the Android view hardcoded its metering point to the
+   * top-left corner. `patches/expo-camera+57.0.5.patch` splits
+   * startFocusMetering so it takes a point, and registers a `focusPoint` prop.
+   *
+   * expo-camera's convertNativeProps forwards any prop it has no conversion
+   * table for straight through to the native view, so the patch needs no
+   * JavaScript change inside the library - the string below arrives natively as
+   * "x,y#seq" and is parsed there. Encoding the coordinates and the sequence
+   * together in one prop means the view manager cannot apply them out of order
+   * and focus somewhere stale.
+   *
+   * Coordinates are normalised to 0..1 across the preview, because that is what
+   * DisplayOrientedMeteringPointFactory expects regardless of the device's
+   * resolution or aspect ratio.
+   */
+  const focusPayload = focusAt
+    ? `${focusAt.x.toFixed(4)},${focusAt.y.toFixed(4)}#${focusSeq.current}`
+    : undefined;
+
+  const handlePreviewTap = useCallback((locationX: number, locationY: number) => {
+    if (!viewSize.width || !viewSize.height) return;
+    const x = locationX / viewSize.width;
+    const y = locationY / viewSize.height;
+    if (x < 0 || x > 1 || y < 0 || y > 1) return;
+
+    focusSeq.current += 1;
+    setFocusAt({ x, y });
+
+    if (focusTimer.current) clearTimeout(focusTimer.current);
+    focusTimer.current = setTimeout(() => setFocusAt(null), FOCUS_FEEDBACK_MS);
+  }, [viewSize.width, viewSize.height]);
 
   const HINTS = [
     "Fit the WHOLE plate in frame. No need to squeeze it into a box.",
@@ -263,7 +301,7 @@ export function ScanScreen({
     setTop(null);
     setSide(null);
     setStep(0);
-    setZoomLevel(0);
+    setFocusAt(null);
   }
 
   /** From the confirmation screen, go back to the viewfinder without discarding. */
@@ -306,7 +344,7 @@ export function ScanScreen({
       if (elapsed < MIN_ANALYSIS_MS) {
         await new Promise((r) => setTimeout(r, MIN_ANALYSIS_MS - elapsed));
       }
-      onResult(meal);
+      onResult(meal, top ?? undefined);
     } catch (e) {
       if (isQuotaError(e)) {
         Alert.alert("Free scans used up", quotaMessage(e.quota, e.quota.model ?? "Gemini"));
@@ -462,18 +500,47 @@ export function ScanScreen({
 
   return (
     <View className="flex-1 bg-[#0A0A0F]">
-      <CameraView
-        ref={cameraRef}
+      <Pressable
         style={{ flex: 1 }}
-        facing="back"
-        flash={torchOn ? "on" : "off"}
-        enableTorch={torchOn}
-        autofocus="on"
-        zoom={zoomLevel}
-        pictureSize={pictureSize}
-        animateShutter={false}
-        onTouchEnd={onCameraTap}
-      />
+        onLayout={(e) =>
+          setViewSize({
+            width: e.nativeEvent.layout.width,
+            height: e.nativeEvent.layout.height,
+          })
+        }
+        onPress={(e) => handlePreviewTap(e.nativeEvent.locationX, e.nativeEvent.locationY)}
+      >
+        <PatchedCameraView
+          ref={cameraRef}
+          style={{ flex: 1 }}
+          facing="back"
+          flash={torchOn ? "on" : "off"}
+          enableTorch={torchOn}
+          autofocus="on"
+          focusPoint={focusPayload}
+          pictureSize={pictureSize}
+          animateShutter={false}
+        />
+      </Pressable>
+
+      {/* focus reticle - shown only because the tap genuinely re-meters the
+          camera there, and cleared as soon as the indicator is stale. */}
+      {focusAt && viewSize.width ? (
+        <View
+          pointerEvents="none"
+          style={{
+            position: "absolute",
+            left: focusAt.x * viewSize.width - 36,
+            top: focusAt.y * viewSize.height - 36,
+            width: 72,
+            height: 72,
+            borderRadius: 8,
+            borderWidth: 2,
+            borderColor: colors.mint500,
+            backgroundColor: "rgba(0,200,83,0.10)",
+          }}
+        />
+      ) : null}
 
       {/* framing guide - deliberately open. This is NOT a crop box; the capture
           always takes the full camera frame. Corner brackets just suggest where
@@ -520,7 +587,7 @@ export function ScanScreen({
           {step === 0 ? (
             <Text className="mt-1 text-center text-[11px] font-medium text-[#6FE3A0]">
               Put a thumb, coin or card BESIDE the food (not in it) - it becomes
-              a ruler we use for real weights. Double-tap to zoom in.
+              a ruler we use for real weights. Tap the food to focus on it.
             </Text>
           ) : null}
         </View>

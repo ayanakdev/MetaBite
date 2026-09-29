@@ -9,7 +9,9 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { NutritionBreakdown } from "../components/NutritionBreakdown";
+import { PhotoThumb, PhotoViewer } from "../components/PhotoViewer";
 import { loadDay } from "../lib/history";
+import { photoUrls } from "../lib/photoStorage";
 import { useMetaBite } from "../context/MetaBiteContext";
 import { colors } from "../theme";
 import type { LoggedMeal, Micros, ParsedMeal } from "../lib/types";
@@ -65,6 +67,26 @@ export function DayDetailScreen({
 
   const { totals } = state;
 
+  const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
+
+  /**
+   * One batched signing call for the whole day rather than one per row. The
+   * bucket is private, so a path is not renderable until it is exchanged for a
+   * signed URL, and N separate calls would be N round trips to draw a list.
+   */
+  const [signed, setSigned] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let cancelled = false;
+    const paths = state.meals.map((m) => m.photo_path).filter((p): p is string => !!p);
+    if (paths.length === 0) return;
+    photoUrls(paths).then((map) => {
+      if (!cancelled) setSigned(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [state.meals]);
+
   // Adapt the day roll-up to the shape NutritionBreakdown already consumes, so
   // the macro cards, the fiber/sugar/sodium rows and the % DV micronutrient
   // bars are all exactly the same component the meal screens use.
@@ -86,6 +108,10 @@ export function DayDetailScreen({
   const kcalGoal = profile?.daily_calorie_goal ?? 0;
   const proteinGoal = profile?.daily_protein_goal ?? 0;
   const pct = kcalGoal > 0 && totals ? Math.min(100, (totals.calories / kcalGoal) * 100) : 0;
+
+  if (viewingPhoto) {
+    return <PhotoViewer uri={viewingPhoto} onClose={() => setViewingPhoto(null)} />;
+  }
 
   return (
     <View className="flex-1 bg-white">
@@ -162,21 +188,28 @@ export function DayDetailScreen({
             <Text className="text-sm text-[#6B7280]">Nothing was logged on this day.</Text>
           ) : (
             <View className="gap-2.5">
-              {state.meals.map((m) => (
+              {state.meals.map((m) => {
+                const thumb = m.photo_path ? signed[m.photo_path] : undefined;
+                return (
                 <Pressable
                   key={m.id}
                   onPress={() => onOpenMeal(m)}
                   className="flex-row items-center rounded-2xl border border-[#E5E7EB] px-4 py-3.5 active:opacity-70"
                 >
-                  <View className="flex-1 pr-3">
-                    <Text className="font-bold text-[#0A0A0F]" numberOfLines={1}>
-                      {m.title}
-                    </Text>
-                    <Text className="mt-0.5 text-xs text-[#6B7280]">
-                      {when(m.logged_at)} · P{nfOneDp.format(Number(m.protein_g))}g · C
-                      {nfOneDp.format(Number(m.carbs_g))}g · F
-                      {nfOneDp.format(Number(m.fat_g))}g
-                    </Text>
+                  <View className="flex-1 flex-row items-center pr-3">
+                    {thumb ? (
+                      <PhotoThumb uri={thumb} size={48} onPress={() => setViewingPhoto(thumb)} />
+                    ) : null}
+                    <View className="flex-1 pl-3">
+                      <Text className="font-bold text-[#0A0A0F]" numberOfLines={1}>
+                        {m.title}
+                      </Text>
+                      <Text className="mt-0.5 text-xs text-[#6B7280]">
+                        {when(m.logged_at)} · P{nfOneDp.format(Number(m.protein_g))}g · C
+                        {nfOneDp.format(Number(m.carbs_g))}g · F
+                        {nfOneDp.format(Number(m.fat_g))}g
+                      </Text>
+                    </View>
                   </View>
                   <Text className="text-base font-extrabold text-[#0A4A24]">
                     {nfWhole.format(Number(m.calories))}
@@ -188,7 +221,8 @@ export function DayDetailScreen({
                     style={{ marginLeft: 8 }}
                   />
                 </Pressable>
-              ))}
+                );
+              })}
             </View>
           )}
         </ScrollView>

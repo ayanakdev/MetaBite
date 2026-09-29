@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Image,
   Pressable,
   ScrollView,
   Text,
@@ -10,23 +11,30 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
 import { recalculateMeal, sumIngredients } from "../lib/gemini";
 import { applyVerification, verifyAll, verifyIngredientRow } from "../lib/verify";
 import { NutritionBreakdown } from "../components/NutritionBreakdown";
+import { PhotoViewer } from "../components/PhotoViewer";
 import { auditMeal } from "../lib/sanity";
 import { supabase } from "../lib/supabase";
+import { uploadMealPhoto } from "../lib/photoStorage";
 import { useMetaBite } from "../context/MetaBiteContext";
 import { colors } from "../theme";
+import type { Shot } from "../lib/imagePrep";
 import type { ParsedMeal } from "../lib/types";
 import { edibleWeight, hasBone } from "../lib/types";
 import { nfWhole } from "../lib/format";
 
 export function IngredientEditorScreen({
   initial,
+  photo,
   onDone,
   onCancel,
 }: {
   initial: ParsedMeal;
+  /** The captured frame, displayed here and uploaded on save. */
+  photo?: Shot;
   onDone: () => void;
   onCancel: () => void;
 }) {
@@ -41,6 +49,7 @@ export function IngredientEditorScreen({
   const [saving, setSaving] = useState(false);
   const [verifying, setVerifying] = useState(false);
   const [verified, setVerified] = useState<Record<number, string>>({});
+  const [viewingPhoto, setViewingPhoto] = useState(false);
 
   const local = sumIngredients(ingredients);
   const kcal = initial.calories > 0 ? initial.calories : local.calories;
@@ -121,15 +130,33 @@ export function IngredientEditorScreen({
   }
 
   /** Recompute totals from the locally-summed rows. */
+  /**
+   * Upload the photo, then write the meal.
+   *
+   * The photo goes first because its path has to be part of the insert. A failed
+   * upload is not fatal: the meal is the point, the picture is a bonus, so
+   * `uploadMealPhoto` returns null on error and the row is still saved without
+   * one. A failed INSERT, by contrast, is surfaced to the user rather than
+   * silently dropped.
+   */
   async function save() {
     if (!user) return;
     const totals = sumIngredients(ingredients);
     setSaving(true);
     try {
+      const path = photo
+        ? await uploadMealPhoto({
+            userId: user.id,
+            base64: photo.base64,
+            mimeType: photo.mimeType,
+          })
+        : null;
+
       const { error } = await supabase.from("logged_meals").insert({
         user_id: user.id,
         title: title.trim() || "Meal",
         source: "gemini",
+        photo_path: path,
         ingredients,
         calories: totals.calories,
         protein_g: totals.protein_g,
@@ -149,6 +176,10 @@ export function IngredientEditorScreen({
     } finally {
       setSaving(false);
     }
+  }
+
+  if (viewingPhoto && photo) {
+    return <PhotoViewer uri={photo.uri} onClose={() => setViewingPhoto(false)} />;
   }
 
   return (
@@ -171,6 +202,26 @@ export function IngredientEditorScreen({
       </View>
 
       <ScrollView contentContainerStyle={{ padding: 20, paddingBottom: 60 }}>
+        {photo ? (
+          <Pressable
+            onPress={() => setViewingPhoto(true)}
+            className="mb-5 overflow-hidden rounded-3xl border border-[#E5E7EB] bg-[#F3F4F6] active:opacity-80"
+          >
+            <Image
+              source={{ uri: photo.uri }}
+              style={{ width: "100%", height: 220 }}
+              resizeMode="cover"
+              accessibilityLabel="Photo of this meal"
+            />
+            <View className="flex-row items-center justify-between px-4 py-2.5">
+              <Text className="text-[11px] font-semibold text-[#6B7280]">
+                The photo these numbers came from
+              </Text>
+              <Ionicons name="expand-outline" size={16} color={colors.muted} />
+            </View>
+          </Pressable>
+        ) : null}
+
         <TextInput
           value={title}
           onChangeText={setTitle}

@@ -20,6 +20,7 @@ import { IngredientEditorScreen } from "./src/screens/IngredientEditorScreen";
 import { MealDetailScreen } from "./src/screens/MealDetailScreen";
 import { DayDetailScreen } from "./src/screens/DayDetailScreen";
 import { colors } from "./src/theme";
+import type { Shot } from "./src/lib/imagePrep";
 import type { LoggedMeal, ParsedMeal } from "./src/lib/types";
 
 const Tab = createBottomTabNavigator();
@@ -136,7 +137,13 @@ function Tabs() {
 
 function Root() {
   const { session, profile, loading } = useMetaBite();
-  const [draft, setDraft] = React.useState<ParsedMeal | null>(null);
+  /**
+   * The photo is carried alongside the meal rather than inside ParsedMeal,
+   * because that type mirrors the database shape. The whole Shot goes with it,
+   * since the file URI is needed to display the photo and the base64 to upload
+   * it - re-encoding it from the URI at save time would be wasted work.
+   */
+  const [draft, setDraft] = React.useState<{ meal: ParsedMeal; photo?: Shot } | null>(null);
 
   if (loading) {
     return <BrandSplash />;
@@ -155,8 +162,8 @@ function Root() {
         {({ navigation }) => (
           <ScanScreen
             onCancel={() => navigation.goBack()}
-            onResult={(meal) => {
-              setDraft(meal);
+            onResult={(meal, photo) => {
+              setDraft({ meal, photo });
               navigation.navigate("Review");
             }}
           />
@@ -169,7 +176,8 @@ function Root() {
         {({ navigation }) =>
           draft ? (
             <IngredientEditorScreen
-              initial={draft}
+              initial={draft.meal}
+              photo={draft.photo}
               onDone={() => {
                 // Saving should feel like "logged", so land on the dashboard
                 // rather than dropping the user back into the camera they just

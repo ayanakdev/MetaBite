@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Pressable,
   RefreshControl,
@@ -10,6 +10,8 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { AvatarIcon } from "../components/AvatarIcon";
 import { FluidTank, MiniTank } from "../components/FluidTank";
+import { PhotoThumb, PhotoViewer } from "../components/PhotoViewer";
+import { photoUrls } from "../lib/photoStorage";
 import { useMetaBite } from "../context/MetaBiteContext";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, type AvatarKey } from "../theme";
@@ -28,6 +30,25 @@ export function DashboardScreen({
   const { width: vw } = useWindowDimensions();
   const tankSize = Math.max(200, Math.min(272, vw - 56));
   const [refreshing, setRefreshing] = useState(false);
+
+  /**
+   * Thumbnails come from a private bucket, so the stored paths have to be
+   * exchanged for signed URLs. Batched into one call, and cached by path in
+   * photoStorage, so scrolling back to the dashboard does not re-sign.
+   */
+  const [signed, setSigned] = useState<Record<string, string>>({});
+  const [viewingPhoto, setViewingPhoto] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const paths = meals.map((m) => m.photo_path).filter((p): p is string => !!p);
+    if (paths.length === 0) return;
+    photoUrls(paths).then((map) => {
+      if (!cancelled) setSigned(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [meals]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -49,6 +70,10 @@ export function DashboardScreen({
 
   const clamp01 = (used: number, goal: number) =>
     goal <= 0 ? 0 : Math.min(1, used / goal);
+
+  if (viewingPhoto) {
+    return <PhotoViewer uri={viewingPhoto} onClose={() => setViewingPhoto(null)} />;
+  }
 
   return (
     <View className="flex-1 bg-white">
@@ -147,20 +172,27 @@ export function DashboardScreen({
             </View>
           ) : (
             <View className="gap-3">
-              {meals.map((m) => (
+              {meals.map((m) => {
+                const thumb = m.photo_path ? signed[m.photo_path] : undefined;
+                return (
                 <Pressable
                   key={m.id}
                   onPress={() => onOpenMeal(m)}
                   className="flex-row items-center justify-between rounded-2xl border border-[#E5E7EB] px-4 py-4 active:opacity-70"
                 >
-                  <View className="flex-1 pr-3">
-                    <Text className="font-bold text-[#0A0A0F]" numberOfLines={1}>
-                      {m.title}
-                    </Text>
-                    <Text className="mt-0.5 text-xs text-[#6B7280]">
-                      P {nfWhole.format(Number(m.protein_g))}g · C{" "}
-                      {nfWhole.format(Number(m.carbs_g))}g · F {nfWhole.format(Number(m.fat_g))}g
-                    </Text>
+                  <View className="flex-1 flex-row items-center pr-3">
+                    {thumb ? (
+                      <PhotoThumb uri={thumb} size={44} onPress={() => setViewingPhoto(thumb)} />
+                    ) : null}
+                    <View className="flex-1 pl-3">
+                      <Text className="font-bold text-[#0A0A0F]" numberOfLines={1}>
+                        {m.title}
+                      </Text>
+                      <Text className="mt-0.5 text-xs text-[#6B7280]">
+                        P {nfWhole.format(Number(m.protein_g))}g · C{" "}
+                        {nfWhole.format(Number(m.carbs_g))}g · F {nfWhole.format(Number(m.fat_g))}g
+                      </Text>
+                    </View>
                   </View>
                   <Text className="text-base font-extrabold text-[#0A4A24]">
                     {nfWhole.format(Number(m.calories))}
@@ -172,7 +204,8 @@ export function DashboardScreen({
                     style={{ marginLeft: 8 }}
                   />
                 </Pressable>
-              ))}
+                );
+              })}
             </View>
           )}
         </View>
