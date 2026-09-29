@@ -78,6 +78,74 @@ export interface DaySummary {
   meal_count: number;
 }
 
+/**
+ * A day rolled up to a single figure, including the fields the 30-day chart has
+ * no use for. Fiber, sugar, sodium and the micronutrients are only needed when
+ * a single day is opened, so they are deliberately absent from DaySummary - the
+ * chart query stays narrow instead of dragging a jsonb micros blob across 30
+ * rows to render 30 bars.
+ */
+export interface DayTotals extends DaySummary {
+  fiber_g: number;
+  sugar_g: number;
+  sodium_mg: number;
+  /** Summed across the day's meals, keyed by display label. */
+  micros: Record<string, number>;
+}
+
+/** Roll a flat meal list up into one figure for a single app-local day. */
+export function totalsForDay(meals: LoggedMeal[], day: string): DayTotals {
+  const { label, weekday } = labelFor(day);
+  const out: DayTotals = {
+    day,
+    label,
+    weekday,
+    calories: 0,
+    protein_g: 0,
+    carbs_g: 0,
+    fat_g: 0,
+    fiber_g: 0,
+    sugar_g: 0,
+    sodium_mg: 0,
+    micros: {},
+    meal_count: 0,
+  };
+
+  for (const m of meals) {
+    if (m.eaten_on !== day) continue;
+    out.calories += Number(m.calories ?? 0);
+    out.protein_g += Number(m.protein_g ?? 0);
+    out.carbs_g += Number(m.carbs_g ?? 0);
+    out.fat_g += Number(m.fat_g ?? 0);
+    out.fiber_g += Number(m.fiber_g ?? 0);
+    out.sugar_g += Number(m.sugar_g ?? 0);
+    out.sodium_mg += Number(m.sodium_mg ?? 0);
+    out.meal_count += 1;
+
+    // Micronutrients are stored per meal, so a day's figure is the sum of them.
+    // Values that are absent, null or zero are skipped so a meal with no micros
+    // recorded cannot drag the total toward zero.
+    const micros = m.micros;
+    if (micros && typeof micros === "object") {
+      for (const [k, v] of Object.entries(micros as Record<string, unknown>)) {
+        const n = Number(v);
+        if (!Number.isFinite(n) || n <= 0) continue;
+        out.micros[k] = (out.micros[k] ?? 0) + n;
+      }
+    }
+  }
+
+  out.calories = Math.round(out.calories);
+  out.protein_g = Math.round(out.protein_g * 10) / 10;
+  out.carbs_g = Math.round(out.carbs_g * 10) / 10;
+  out.fat_g = Math.round(out.fat_g * 10) / 10;
+  out.fiber_g = Math.round(out.fiber_g * 10) / 10;
+  out.sugar_g = Math.round(out.sugar_g * 10) / 10;
+  out.sodium_mg = Math.round(out.sodium_mg);
+
+  return out;
+}
+
 /** Collapse a flat meal list into one row per day, including empty days. */
 export function summarise(meals: LoggedMeal[], days: number, from = new Date()): DaySummary[] {
   const keys = recentDayKeys(days, from);

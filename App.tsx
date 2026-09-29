@@ -1,7 +1,7 @@
 import "./global.css";
 
 import React from "react";
-import { NavigationContainer, type LinkingOptions } from "@react-navigation/native";
+import { NavigationContainer, useNavigation, type LinkingOptions } from "@react-navigation/native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -18,6 +18,7 @@ import HistoryScreen from "./src/screens/HistoryScreen";
 import { ScanScreen } from "./src/screens/ScanScreen";
 import { IngredientEditorScreen } from "./src/screens/IngredientEditorScreen";
 import { MealDetailScreen } from "./src/screens/MealDetailScreen";
+import { DayDetailScreen } from "./src/screens/DayDetailScreen";
 import { colors } from "./src/theme";
 import type { LoggedMeal, ParsedMeal } from "./src/lib/types";
 
@@ -32,9 +33,29 @@ const linking: LinkingOptions<ReactNavigation.RootParamList> = {
       Scan: "scan",
       Review: "auth/callback",
       MealDetail: "meal/:id",
+      DayDetail: "day/:id",
     },
   },
 };
+
+/**
+ * A stable component for the Dashboard tab.
+ *
+ * It used to be a function child, which React Navigation re-invokes on every
+ * render of the navigator. That re-rendered the whole dashboard - including the
+ * Reanimated fluid tank - each time the user moved between tabs. A `component`
+ * reference is resolved once, so switching tabs no longer re-renders a screen
+ * that is merely sitting in the background.
+ */
+function DashboardTab() {
+  const navigation = useNavigation<any>();
+  return (
+    <DashboardScreen
+      onScan={() => navigation.navigate("Scan" as never)}
+      onOpenMeal={(meal) => navigation.navigate("MealDetail", { meal })}
+    />
+  );
+}
 
 function Tabs() {
   // Android 15+ forces edge-to-edge, so the system nav bar draws OVER app
@@ -44,8 +65,30 @@ function Tabs() {
 
   return (
     <Tab.Navigator
+      /**
+       * Stop detaching the tab that is losing focus.
+       *
+       * react-navigation defaults this to true on Android. Detaching removes the
+       * screen from the native view hierarchy, so between the outgoing screen
+       * going away and the incoming screen committing its first frame there is
+       * genuinely nothing there to draw - and since react-navigation never sets a
+       * background on that container, Android composites the gap against the
+       * window and you get a black flash on every tab press. It looked like a
+       * lag spike because it is roughly one dropped frame long.
+       *
+       * Three tab screens is a negligible amount of memory to keep mounted, and
+       * keeping them mounted also means History and Settings no longer re-run
+       * their queries every time you come back to them.
+       */
+      detachInactiveScreens={false}
       screenOptions={{
         headerShown: false,
+        /**
+         * Rendering with a white scene rather than the default transparent one is
+         * the second half of the same fix: if any gap does appear, it is the app's
+         * own background instead of a black rectangle.
+         */
+        sceneStyle: { backgroundColor: colors.surface },
         tabBarActiveTintColor: colors.jade500,
         tabBarInactiveTintColor: "#9CA3AF",
         tabBarStyle: {
@@ -61,19 +104,13 @@ function Tabs() {
     >
       <Tab.Screen
         name="Dashboard"
+        component={DashboardTab}
         options={{
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="stats-chart" size={size} color={color} />
           ),
         }}
-      >
-        {({ navigation }) => (
-          <DashboardScreen
-            onScan={() => navigation.navigate("Scan" as never)}
-            onOpenMeal={(meal) => navigation.navigate("MealDetail", { meal })}
-          />
-        )}
-      </Tab.Screen>
+      />
       <Tab.Screen
         name="History"
         component={HistoryScreen}
@@ -152,6 +189,18 @@ function Root() {
           <MealDetailScreen
             meal={(route.params as { meal: LoggedMeal }).meal}
             onBack={() => navigation.goBack()}
+          />
+        )}
+      </Stack.Screen>
+      <Stack.Screen
+        name="DayDetail"
+        options={{ animation: "slide_from_right" }}
+      >
+        {({ navigation, route }) => (
+          <DayDetailScreen
+            day={(route.params as { day: string }).day}
+            onBack={() => navigation.goBack()}
+            onOpenMeal={(meal) => navigation.navigate("MealDetail", { meal })}
           />
         )}
       </Stack.Screen>

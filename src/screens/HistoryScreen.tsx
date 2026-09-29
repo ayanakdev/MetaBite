@@ -8,6 +8,8 @@ import {
   View,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useNavigation } from "@react-navigation/native";
+import { Ionicons } from "@expo/vector-icons";
 import { loadHistory, HISTORY_DAYS, type DaySummary } from "../lib/history";
 import { useMetaBite } from "../context/MetaBiteContext";
 import { colors } from "../theme";
@@ -22,6 +24,9 @@ import { colors } from "../theme";
 export default function HistoryScreen() {
   const insets = useSafeAreaInsets();
   const { profile } = useMetaBite();
+  // DayDetail lives in the root stack above the tabs, so navigating by name from
+  // here bubbles up to it.
+  const navigation = useNavigation<any>();
   const [days, setDays] = useState<DaySummary[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [metric, setMetric] = useState<"calories" | "protein_g">("calories");
@@ -144,6 +149,11 @@ export default function HistoryScreen() {
       <Text className="mb-3 mt-7 text-xs font-bold uppercase tracking-widest text-[#6B7280]">
         Day by day
       </Text>
+      {logged.length > 0 ? (
+        <Text className="-mt-1 mb-3 text-[11px] font-semibold text-[#9CA3AF]">
+          Tap a day to see its meals, macros and micronutrients.
+        </Text>
+      ) : null}
 
       {days === null ? null : days.length === 0 || logged.length === 0 ? (
         <View className="items-center rounded-3xl bg-[#F9FAFB] px-6 py-10">
@@ -156,9 +166,11 @@ export default function HistoryScreen() {
           .slice()
           .reverse()
           .map((d) => (
-            <View
+            <Pressable
               key={d.day}
-              className="mb-2 flex-row items-center rounded-2xl border border-[#E5E7EB] px-4 py-3"
+              onPress={() => navigation.navigate("DayDetail", { day: d.day })}
+              disabled={d.meal_count === 0}
+              className="mb-2 flex-row items-center rounded-2xl border border-[#E5E7EB] px-4 py-3 active:opacity-70"
             >
               <View className="w-16">
                 <Text className="text-sm font-extrabold text-[#0A0A0F]">{d.label}</Text>
@@ -185,19 +197,27 @@ export default function HistoryScreen() {
               </View>
 
               {d.meal_count > 0 ? (
-                <View
-                  className="rounded-full px-2.5 py-1"
-                  style={{ backgroundColor: colors.mint50 }}
-                >
-                  <Text
-                    className="text-[10px] font-extrabold"
-                    style={{ color: colors.jade500 }}
+                <View className="flex-row items-center">
+                  <View
+                    className="rounded-full px-2.5 py-1"
+                    style={{ backgroundColor: colors.mint50 }}
                   >
-                    {d.meal_count} {d.meal_count === 1 ? "meal" : "meals"}
-                  </Text>
+                    <Text
+                      className="text-[10px] font-extrabold"
+                      style={{ color: colors.jade500 }}
+                    >
+                      {d.meal_count} {d.meal_count === 1 ? "meal" : "meals"}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name="chevron-forward"
+                    size={16}
+                    color={colors.muted}
+                    style={{ marginLeft: 8 }}
+                  />
                 </View>
               ) : null}
-            </View>
+            </Pressable>
           ))
       )}
     </ScrollView>
