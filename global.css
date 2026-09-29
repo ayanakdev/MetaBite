@@ -1,0 +1,29 @@
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+
+@import "nativewind/theme";
+
+@theme {
+  /* MetaBite brand palette */
+  --color-surface: #ffffff;
+  --color-ink: #0a0a0f;
+  --color-muted: #6b7280;
+
+  --color-mint-50: #e8fbf0;
+  --color-mint-100: #c8f5dd;
+  --color-mint-300: #6fe3a0;
+  --color-mint-500: #00c853;
+  --color-mint-600: #00a844;
+  --color-mint-700: #008737;
+
+  --color-jade-500: #0a4a24;
+  --color-jade-600: #083a1d;
+  --color-jade-700: #062b16;
+
+  --color-protein: #00c853;
+  --color-carbs: #0a4a24;
+  --color-fat: #f59e0b;
+
+  --color-danger: #dc2626;
+}

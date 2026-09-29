@@ -1,0 +1,74 @@
+# Learn more https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files - NEVER commit these
+# Covers .env, .env.local, .env.production, etc. .env.example is the only one
+# that is meant to be tracked, and it holds no values.
+.env
+.env.*
+!.env.example
+
+# machine-specific SDK paths (contains a local filesystem path, not a secret,
+# but it is per-developer and must not be shared)
+local.properties
+
+# built artefacts - a signed release APK embeds the JS bundle, which means the
+# EXPO_PUBLIC_* values are readable straight out of it, and a 47 MB binary
+# should not live in git history
+*.apk
+*.aab
+*.ap_
+*.ipa
+
+# typescript
+*.tsbuildinfo
+
+# generated native folders
+# This project keeps its android/ directory locally because it holds a real
+# release signing setup, but it is regenerated with `npm run prebuild`, so it is
+# not tracked. Never force-add it: android/keystore.properties and
+# android/local.properties live inside it.
+/ios
+/android
+
+# local build smoke tests
+.expo-smoketest/
+
+# signing - never commit these
+*.keystore
+*.jks
+android/keystore.properties
+*.p8
+*.p12
+*.mobileprovision
+*.pem
+
