@@ -4,7 +4,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { NutritionBreakdown } from "../components/NutritionBreakdown";
 import { BowlIcon } from "../components/NutritionIcons";
 import { colors } from "../theme";
-import type { Ingredient, LoggedMeal, Micros, ParsedMeal } from "../lib/types";
+import { edibleWeight, hasBone, type Ingredient, type LoggedMeal, type Micros, type ParsedMeal } from "../lib/types";
 import { nfOneDp } from "../lib/format";
 
 function when(iso: string) {
@@ -42,9 +42,12 @@ export function MealDetailScreen({
   // The stored row is the source of truth; this just adapts it to the shape the
   // breakdown component already consumes.
   const ingredients: Ingredient[] = Array.isArray(meal.ingredients)
-    ? meal.ingredients.map((i) => ({
+    ? meal.ingredients.map((i: any) => ({
         name: String(i?.name ?? "Unknown"),
         quantity_g: Number(i?.quantity_g ?? 0),
+        // Carried through so the ingredient list can show what was deducted as
+        // bone. Meals logged before this field existed simply have none.
+        edible_g: i?.edible_g === undefined ? undefined : Number(i.edible_g),
         calories: Number(i?.calories ?? 0),
         protein_g: Number(i?.protein_g ?? 0),
         carbs_g: Number(i?.carbs_g ?? 0),
@@ -121,6 +124,11 @@ export function MealDetailScreen({
                     {nfOneDp.format(ing.quantity_g)}g · P{nfOneDp.format(ing.protein_g)} C
                     {nfOneDp.format(ing.carbs_g)} F{nfOneDp.format(ing.fat_g)}
                   </Text>
+                  {hasBone(ing) ? (
+                    <Text className="mt-0.5 text-[11px] font-semibold text-[#B45309]">
+                      {nfOneDp.format(ing.quantity_g - edibleWeight(ing))}g bone deducted
+                    </Text>
+                  ) : null}
                 </View>
                 <Text className="text-base font-extrabold text-[#0A4A24]">
                   {nfOneDp.format(ing.calories)}

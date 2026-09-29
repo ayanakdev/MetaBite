@@ -18,6 +18,7 @@ import { supabase } from "../lib/supabase";
 import { useMetaBite } from "../context/MetaBiteContext";
 import { colors } from "../theme";
 import type { ParsedMeal } from "../lib/types";
+import { edibleWeight, hasBone } from "../lib/types";
 import { nfWhole } from "../lib/format";
 
 export function IngredientEditorScreen({
@@ -273,6 +274,12 @@ export function IngredientEditorScreen({
                     {nfWhole.format(ing.quantity_g)}g · P{nfWhole.format(ing.protein_g)} C
                     {nfWhole.format(ing.carbs_g)} F{nfWhole.format(ing.fat_g)}
                   </Text>
+                  {hasBone(ing) ? (
+                    <Text className="mt-0.5 text-[11px] font-semibold text-[#B45309]">
+                      {nfWhole.format(ing.quantity_g - edibleWeight(ing))}g bone deducted ·{" "}
+                      {nfWhole.format(edibleWeight(ing))}g meat priced
+                    </Text>
+                  ) : null}
                   {verified[i] ? (
                     <Text className="mt-0.5 text-[11px] font-semibold text-[#00A844]" numberOfLines={1}>
                       verified: {verified[i]}

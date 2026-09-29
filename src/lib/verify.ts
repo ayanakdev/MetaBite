@@ -1,4 +1,5 @@
 import type { Ingredient } from "./types";
+import { edibleWeight } from "./types";
 import { verifyIngredient, scaleToGrams } from "./usda";
 import { searchFood } from "./openfoodfacts";
 
@@ -55,7 +56,9 @@ export function applyVerification(
   ing: Ingredient,
   v: Verification,
 ): Ingredient {
-  const scaled = scaleToGrams(v.per100g, ing.quantity_g || 100);
+  // Scaled by edible weight, matching resolveIngredient, so the manual verify
+  // button cannot quietly disagree with the automatic cross-check.
+  const scaled = scaleToGrams(v.per100g, edibleWeight(ing) || 100);
   const use = (key: string, current: number) => {
     const n = scaled[key];
     return typeof n === "number" && n > 0 ? Math.round(n * 10) / 10 : current;

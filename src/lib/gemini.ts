@@ -1,4 +1,5 @@
 import type { Ingredient, ParsedMeal } from "./types";
+import { edibleWeight } from "./types";
 import { parseQuota, quotaMessage, GeminiQuotaError, isQuotaError, MODEL_CHAIN, type QuotaInfo } from "./quota";
 
 /**
@@ -25,13 +26,22 @@ const INGREDIENT_SCHEMA = {
   properties: {
     name: { type: "string" },
     quantity_g: { type: "number" },
+    edible_g: { type: "number" },
     calories: { type: "number" },
     protein_g: { type: "number" },
     carbs_g: { type: "number" },
     fat_g: { type: "number" },
   },
   required: ["name", "quantity_g", "calories", "protein_g", "carbs_g", "fat_g"],
-  propertyOrdering: ["name", "quantity_g", "calories", "protein_g", "carbs_g", "fat_g"],
+  propertyOrdering: [
+    "name",
+    "quantity_g",
+    "edible_g",
+    "calories",
+    "protein_g",
+    "carbs_g",
+    "fat_g",
+  ],
 } as const;
 
 const MEAL_SCHEMA = {
@@ -262,14 +272,20 @@ function num(v: unknown, fallback = 0) {
 
 function normalize(raw: any): ParsedMeal {
   const ingredients: Ingredient[] = Array.isArray(raw?.ingredients)
-    ? raw.ingredients.map((i: any) => ({
-        name: String(i?.name ?? "Unknown").trim(),
-        quantity_g: num(i?.quantity_g),
-        calories: num(i?.calories),
-        protein_g: num(i?.protein_g),
-        carbs_g: num(i?.carbs_g),
-        fat_g: num(i?.fat_g),
-      }))
+    ? raw.ingredients.map((i: any) => {
+        const quantity_g = num(i?.quantity_g);
+        return {
+          name: String(i?.name ?? "Unknown").trim(),
+          quantity_g,
+          // Clamped by the same helper every consumer uses, so a nonsense
+          // edible_g from the model cannot diverge from what gets priced.
+          edible_g: edibleWeight({ quantity_g, edible_g: i?.edible_g }),
+          calories: num(i?.calories),
+          protein_g: num(i?.protein_g),
+          carbs_g: num(i?.carbs_g),
+          fat_g: num(i?.fat_g),
+        };
+      })
     : [];
 
   const conf = num(raw?.portion_confidence, 0.5);
@@ -386,10 +402,32 @@ answers "one cup of rice" for every bowl is wrong; the whole point is the
 ACTUAL VISIBLE PORTION in the photo. If the bowl is half full, report half a
 bowl's worth. Scale every gram estimate to the real amount of food present.
 
-For very common single items whose nutrition is universally known (one large
-egg is ~50 g with ~6 g protein and ~70-75 kcal; a medium apple ~180 g with ~95
-kcal), state the canonical per-item nutrition for the portion actually visible
-rather than inventing numbers.
+  For very common single items whose nutrition is universally known (one large
+  egg is ~50 g with ~6 g protein and ~70-75 kcal; a medium apple ~180 g with ~95
+  kcal), state the canonical per-item nutrition for the portion actually visible
+  rather than inventing numbers.
+
+BONE, SHELL AND SKIN - report the piece you can see AND the meat you can eat.
+
+A bone-in cut is not all meat, and nutrition tables are not quoted on the bone.
+Set quantity_g to the weight of the piece AS IT APPEARS, bone included, and
+edible_g to the weight of the flesh actually eaten. When there is nothing to
+remove, set edible_g equal to quantity_g.
+
+This matters most on desi and bone-in dishes - biryani, pulao, karahi, tikka,
+rogan josh, fried chicken, whole fish, lamb chops. A chicken leg quarter is
+roughly a quarter bone, a drumstick or a thigh on the bone about a fifth to a
+quarter, a wing about a third, and a lamb or beef chop about a quarter to a
+third. A fish with the bones left in is around a fifth.
+
+Then derive calories, protein, carbs and fat from edible_g, NOT from quantity_g.
+Bone contributes almost no energy and very little protein. A 250 g leg quarter
+with a 70 g bone is 180 g of meat at about 185 kcal and 35 g protein, not
+250 g at 290 kcal and 52 g. Getting this wrong inflates a biryani by hundreds
+of calories.
+
+If the user says the meat is boneless, fill or cutlet, or steak, treat it as
+edible_g equal to quantity_g.
 
 Return per-item calories, protein, carbs and fat in grams, plus whole-meal
 totals including fiber, sugar and sodium. Set portion_confidence low (under
@@ -435,9 +473,14 @@ export async function recalculateMeal(params: {
   const prompt =
     `Here is a corrected ingredient list for "${params.title}":\n${list}\n\n` +
     `The local totals are: ${local.calories.toFixed(0)} kcal, ` +
-    `P ${local.protein_g.toFixed(1)}g, C ${local.carbs_g.toFixed(1)}g, F ${local.fat_g.toFixed(1)}g.\n` +
+    `P ${local.protein_g.toFixed(1)}g, C ${local.carbs_g.toFixed(1)}g, F ${local.fat_g.toFixed(1)}g.\n\n` +
     `Return the meal JSON using those local totals for calories/protein/carbs/fat, ` +
-    `and estimate fiber_g, sugar_g and sodium_mg for the whole meal.`;
+    `and estimate fiber_g, sugar_g and sodium_mg for the whole meal. ` +
+    `Set edible_g equal to quantity_g for every row, unless the name refers to a ` +
+    `bone-in cut such as a leg quarter, drumstick, thigh on the bone, wing, chop ` +
+    `or a whole fish - for those, keep quantity_g as the piece weighed whole and ` +
+    `set edible_g to the meat actually eaten, which is roughly a fifth to a third ` +
+    `less.`;
 
   const { text, model } = await callGemini(prompt);
   const parsed = normalize(JSON.parse(text));

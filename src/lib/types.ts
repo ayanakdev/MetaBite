@@ -2,11 +2,65 @@ export type MealSource = "gemini" | "usda" | "openfoodfacts" | "manual";
 
 export interface Ingredient {
   name: string;
+  /**
+   * The weight of the portion as it appears in the photo - what a scale would
+   * read if the user weighed the whole piece. For a bone-in cut this INCLUDES
+   * the bone.
+   */
   quantity_g: number;
+  /**
+   * The weight the user actually eats: the same portion with bone, cartilage,
+   * shell or inedible skin removed.
+   *
+   * Omitted, or equal to quantity_g, when there is nothing to remove. Nutrition
+   * databases quote their per-100 g figures against EDIBLE weight, so this is
+   * the number every macro must be derived from. A chicken leg quarter weighing
+   * 250 g with a 70 g bone is 180 g of meat - pricing the 250 g inflates protein
+   * by around a third, which is the single largest source of error on a
+   * bone-in dish such as biryani, pulao or karahi.
+   */
+  edible_g?: number;
   calories: number;
   protein_g: number;
   carbs_g: number;
   fat_g: number;
+}
+
+/**
+ * The weight nutrition figures should be derived from.
+ *
+ * This is the single place the deduction is clamped, and every caller goes
+ * through it - the consensus pass, the manual verify button, the sanity audit
+ * and both screens that display the split. Keeping the invariant here rather
+ * than in one consumer means a legacy row, a hand-edited value or a bad model
+ * response cannot slip past it.
+ *
+ * Anything not a plausible deduction is treated as "nothing to remove": a value
+ * above the gross weight, a zero or negative, a non-number, or an absurd 95%
+ * inedible. Silently under-reporting a plate is worse than over-reporting it
+ * slightly, and the alternative failure - a row of bone with no meat - would
+ * zero out every macro.
+ */
+export function edibleWeight(row: {
+  quantity_g: number;
+  edible_g?: number | null;
+}): number {
+  const gross = Number(row?.quantity_g) || 0;
+  const net = Number(row?.edible_g);
+  if (!Number.isFinite(net) || net <= 0) return gross;
+  if (net >= gross) return gross;
+  if (net < gross * 0.05) return gross;
+  return net;
+}
+
+/**
+ * True when enough was deducted to be worth telling the user about.
+ *
+ * The half-gram floor keeps a rounding artefact from rendering a "bone deducted"
+ * note on a boneless portion.
+ */
+export function hasBone(row: { quantity_g: number; edible_g?: number | null }): boolean {
+  return edibleWeight(row) < (Number(row?.quantity_g) || 0) - 0.5;
 }
 
 export interface LoggedMeal {

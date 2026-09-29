@@ -1,4 +1,5 @@
 import type { Ingredient, Micros, ParsedMeal } from "./types";
+import { edibleWeight } from "./types";
 import { nameMatch, MATCH_FLOOR } from "./nameMatch";
 import { usdaSearch, scaleToGrams } from "./usda";
 import { searchFood as offSearch } from "./openfoodfacts";
@@ -132,7 +133,11 @@ export async function resolveIngredient(
     };
   }
 
-  const grams = modelRow.quantity_g || 100;
+  // Nutrition databases quote per-100 g against EDIBLE weight, so a bone-in
+  // piece must be scaled by the meat, not by the piece. This is the single most
+  // consequential use of edibleWeight: it is what stops a 250 g leg quarter
+  // being priced as 250 g of meat.
+  const grams = edibleWeight(modelRow) || 100;
 
   // Group the sources into calorie-consistent clusters and keep the heaviest
   // one, so one wildly wrong source cannot drag the estimate.

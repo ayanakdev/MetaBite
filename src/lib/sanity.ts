@@ -1,4 +1,5 @@
 import type { Ingredient, ParsedMeal } from "./types";
+import { edibleWeight } from "./types";
 
 /**
  * Post-scan sanity audit.
@@ -60,6 +61,8 @@ export function checkIngredient(ing: Ingredient): SanityIssue | null {
   const name = (ing.name ?? "").toLowerCase();
   if (!name) return null;
 
+  // The weight ceilings below are about the piece the user can SEE, so they stay
+  // on the gross weight - a genuinely large bone-in cut really is that heavy.
   for (const rule of MAX_WEIGHT) {
     if (rule.test(name) && ing.quantity_g > rule.max) {
       return {
@@ -70,14 +73,19 @@ export function checkIngredient(ing: Ingredient): SanityIssue | null {
     }
   }
 
+  // Protein density, on the other hand, is a property of the meat, so it has to
+  // be measured against edible weight. Dividing by the gross weight of a
+  // bone-in piece dilutes the density and would hide a real error rather than
+  // catch one.
+  const meat = edibleWeight(ing);
   for (const rule of MAX_PROTEIN_PER_100G) {
     if (!rule.test(name)) continue;
-    const per100 = ing.quantity_g > 0 ? (ing.protein_g / ing.quantity_g) * 100 : 0;
+    const per100 = meat > 0 ? (ing.protein_g / meat) * 100 : 0;
     if (per100 > rule.max) {
       return {
         ingredient: ing.name,
         severity: "error",
-        message: `${ing.name}: ${ing.protein_g} g protein in ${grams(ing.quantity_g)} g works out to ${per100.toFixed(1)} g per 100 g, which is too high for ${rule.what}. This is probably not what is in the cup.`,
+        message: `${ing.name}: ${ing.protein_g} g protein in ${grams(meat)} g of meat works out to ${per100.toFixed(1)} g per 100 g, which is too high for ${rule.what}. This is probably not what is in the cup.`,
       };
     }
   }
